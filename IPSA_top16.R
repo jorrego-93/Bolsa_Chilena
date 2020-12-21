@@ -30,7 +30,7 @@ library(ranger)
 library(tictoc)
 library(readxl)
 library(usethis)
-
+library(Rmisc)
 #IMPORTAR DATOS
 empresas<- c("BCI.SN", "BSANTANDER.SN", "CCU.SN", "CENCOSUD.SN", "CHILE.SN", "CMPC.SN", "COLBUN.SN",
              "COPEC.SN", "ENELAM.SN", "FALABELLA.SN", "LTM.SN", "PARAUCO.SN",
@@ -459,4 +459,303 @@ tabla.resultados.htree
 mean(as.double(tabla.resultados.htree[, 9]))*100
 
 
+
+#PERIODO DE PRUEBA, ROLLING WINDOW ANO 2017
+#------------------------------------------------------------------------
+periodo_2017<- 244
+espacio_tiempo<- 20  #DIAS
+rango_tiempo<- seq(from=1, to=225, by=1 )
+tablas.rendimientos<- list()
+tabla.ocio <- matrix(0, nrow=periodo_2017-espacio_tiempo+1, ncol=3)
+cuenta.lugares<- 1
+#TEST SAMPLE
+#tail(datos.CLASS[[1]],n=246)
+
+#225+espacio_tiempo-1
+for (l in rango_tiempo){
+  pf.test.sample<- list()
+  pf.test_factor<- list()
+  
+  for (mm in 1:16) {
+    set.seed(1234)
+    m<-mm
+    largo.test<- nrow(datos.CLASS.final[[m]])
+    pf.test.sample[[m]]<-tail(datos.CLASS.final[[m]], n=periodo_2017)[l:(l+espacio_tiempo-1),]
+    pf.test_factor[[m]]<- as.data.frame(pf.test.sample[[m]])
+    pf.test_factor[[m]]$Prediccion <- factor(pf.test_factor[[m]]$Prediccion)
+  }
+  
+  #MATRIZ RETORNOS IPSA EQUALY WEIGHTED (corrido un dia xq retorno se tiene que multiplicar por pred subida dia anterior)
+  retornos_prueba<- matrix(0, nrow=nrow(pf.test.sample[[1]]), ncol=length(datos.CLASS))
+  for (mm in 1:16) {
+    retornos_prueba[,mm]<- tail(LISTA.completa.final[[mm]], n=periodo_2017)[l:(l+espacio_tiempo-1),]$Rendimiento.close.diario
+  }
+  matriz.pesos.general<- matrix(1/16, nrow=nrow(pf.test.sample[[1]]), ncol=length(datos.CLASS))
+  #sum(colSums(retornos_prueba*matriz.pesos.general))
+  
+  
+  #MATRIZ PESOS RETORNOS IPSA WEIGHTED (corrido un dia xq retorno se tiene que multiplicar por pred subida dia anterior)
+  #sum(IPSA)
+  matriz.pesos.IPSA<- matrix(IPSA, nrow=nrow(pf.test.sample[[1]]), ncol=length(datos.CLASS), byrow=TRUE)
+  #sum(colSums(retornos_prueba*matriz.pesos.IPSA))
+  
+  
+  #RANDOM FOREST
+  #tabla.resultados.rf
+  modelos.utiles.rf<- c(1,2,3,4,5,8,9,10,11,12,13,14,15)
+  #MATRIZ PREDICCION RANDOM FOREST
+  prediccion_randomForest<- matrix(0, nrow=nrow(pf.test.sample[[1]]), ncol=length(datos.CLASS))
+  for (mm in modelos.utiles.rf) {
+    set.seed(1234)
+    m<-mm
+    prueba_randomForest<- predict(modelos.rf[[m]], pf.test.sample[[m]], type="response")
+    prediccion_randomForest[,m]<- ifelse(prueba_randomForest$predictions[,1]>thresholds.rf[[m]]$corte, 0, 1)
+  }
+  head(prediccion_randomForest)
+  #dias ociosos
+  ocio_rf<- sum(ifelse(rowSums(prediccion_randomForest)==0,1,0))
+  
+  #MATRIZ PESOS PORTFOLIO EQUALY WEIGHTED
+  matriz.pesos.rf<- matrix(0, nrow=nrow(pf.test.sample[[1]]), ncol=length(datos.CLASS))
+  for (mm in 1:nrow(prediccion_randomForest)) {
+    if (sum(prediccion_randomForest[mm,]>0)){
+      matriz.pesos.rf[mm, ]<- prediccion_randomForest[mm,]/sum(prediccion_randomForest[mm,])
+    }else{
+      matriz.pesos.rf[mm, ]<- prediccion_randomForest[mm,]
+    }
+  }
+  #head(matriz.pesos.rf)
+  #matriz.pesos
+  #MATRIZ PORTFOLIO EQUALY WEIGHTED RANDOM FOREST
+  portfolio.randomForest_equaly<- prediccion_randomForest*retornos_prueba*matriz.pesos.rf
+  colnames(portfolio.randomForest_equaly)<- empresas
+  #colSums(portfolio.randomForest_equaly)
+  #sum(colSums(portfolio.randomForest_equaly))
+  
+  #COMPARACION PORCENTUAL
+  #sum(colSums(portfolio.randomForest_equaly))/sum(colSums(retornos_prueba*matriz.pesos.general))*100
+  
+  
+  
+  #BAGGED TREES
+  
+  #tabla.resultados.bagged
+  modelos.utiles.bagged.trees<- c(which(tabla.resultados.bagged$`Ratio TN/FN`>0.5))
+  #MATRIZ PREDICCION BAGGED TREES
+  prediccion_baggedTrees<- matrix(0, nrow=nrow(pf.test_factor[[1]]), ncol=length(datos.CLASS))
+  for (mm in modelos.utiles.bagged.trees) {
+    set.seed(1234)
+    m<-mm
+    prueba_baggedTrees<- predict(modelos.bagged.tree[[m]], pf.test_factor[[m]], type="prob")
+    prediccion_baggedTrees[,m]<- ifelse(prueba_baggedTrees[,1]>thresholds.bagged.tree[[m]]$corte, 0, 1)
+  }
+  #head(prediccion_baggedTrees)
+  #dias ociosos
+  ocio_baggedTrees<- sum(ifelse(rowSums(prediccion_baggedTrees)==0,1,0))
+  
+  #MATRIZ PESOS PORTFOLIO EQUALY WEIGHTED BAGGED TREES
+  matriz.pesos.baggedTrees<- matrix(0, nrow=nrow(pf.test_factor[[1]]), ncol=length(datos.CLASS))
+  for (mm in 1:nrow(prediccion_baggedTrees)) {
+    if (sum(prediccion_baggedTrees[mm,]>0)){
+      matriz.pesos.baggedTrees[mm, ]<- prediccion_baggedTrees[mm,]/sum(prediccion_baggedTrees[mm,])
+    }else{
+      matriz.pesos.baggedTrees[mm, ]<- prediccion_baggedTrees[mm,]
+    }
+  }
+  #head(matriz.pesos.baggedTrees)
+  
+  #MATRIZ PORTFOLIO EQUALY WEIGHTED BAGGED TREES
+  portfolio.baggedTrees_equaly<- prediccion_baggedTrees*retornos_prueba*matriz.pesos.baggedTrees
+  colnames(portfolio.baggedTrees_equaly)<- empresas
+  #colSums(portfolio.baggedTrees_equaly)
+  #sum(colSums(portfolio.baggedTrees_equaly))
+  
+  #COMPARACION PORCENTUAL BAGGED TREES
+  #sum(colSums(portfolio.baggedTrees_equaly))/sum(colSums(retornos_prueba*matriz.pesos.general))*100
+  
+  
+  
+  #DECISION TREES
+  
+  #tabla.resultados.htree
+  modelos.utiles.htree<- c(which(tabla.resultados.htree$`Ratio TN/TN+FN`>0.5))
+  #MATRIZ PREDICCION DECISION TREES
+  prediccion_htree<- matrix(0, nrow=nrow(pf.test_factor[[1]]), ncol=length(datos.CLASS))
+  for (mm in modelos.utiles.htree) {
+    set.seed(1234)
+    m<-mm
+    prueba_htree<- predict(modelos.hyper.tree[[m]], pf.test_factor[[m]], type="prob")
+    prediccion_htree[,m]<- ifelse(prueba_htree[,1]>thresholds.hyper.tree[[m]]$corte, 0, 1)
+  }
+  #head(prediccion_htree)
+  #sum(colSums(prediccion_htree))
+  #dias ociosos
+  ocio_htree<- sum(ifelse(rowSums(prediccion_htree)==0,1,0))
+  
+  #MATRIZ PESOS PORTFOLIO EQUALY WEIGHTED DECISION TREES
+  matriz.pesos.htree<- matrix(0, nrow=nrow(pf.test_factor[[1]]), ncol=length(datos.CLASS))
+  for (mm in 1:nrow(prediccion_htree)) {
+    if (sum(prediccion_htree[mm,]>0)){
+      matriz.pesos.htree[mm, ]<- prediccion_htree[mm,]/sum(prediccion_htree[mm,])
+    }else{
+      matriz.pesos.htree[mm, ]<- prediccion_htree[mm,]
+    }
+  }
+  #head(matriz.pesos.htree)
+  
+  #MATRIZ PORTFOLIO EQUALY WEIGHTED DECISION TREES
+  portfolio.htree_equaly<- prediccion_htree*retornos_prueba*matriz.pesos.htree
+  colnames(portfolio.htree_equaly)<- empresas
+  #colSums(portfolio.htree_equaly)
+  #sum(colSums(portfolio.htree_equaly))
+  
+  #COMPARACION PORCENTUAL DECISION TREES
+  #sum(colSums(portfolio.htree_equaly))/sum(colSums(retornos_prueba*matriz.pesos.general))*100
+  
+  
+  
+  
+  #RETORNOS IPSA
+  SP_IPSA_SN <- read_excel("C:\Users\jampr\OneDrive\Escritorio\Memoria\Variables\variables_yahoo_finance\SP-IPSA.SN-2018.xls")
+  SP_IPSA_SN<- na.omit(SP_IPSA_SN)
+  colnames(SP_IPSA_SN)<- c("Periodo", "Precio")
+  #tail(LISTA.completa[[1]]$Retorno.close)
+  IPSA_retornos<- cbind(SP_IPSA_SN[-1,1], (SP_IPSA_SN[-1,2]-SP_IPSA_SN[-nrow(SP_IPSA_SN),2])/SP_IPSA_SN[-1,2] )
+  ipsa_30dias<- sum(tail(IPSA_retornos, n=periodo_2017)[l:(l+espacio_tiempo-1),2])
+  
+  portfolio.htree_equaly
+  #COMPARACIONES
+  
+  rendimientos.1<-c(sum(colSums(portfolio.htree_equaly)), sum(colSums(portfolio.baggedTrees_equaly)), 
+                    sum(colSums(portfolio.randomForest_equaly)), sum(colSums(retornos_prueba*matriz.pesos.general)),ipsa_30dias)
+  rendimientos.2<-rendimientos.1/rendimientos.1[4]
+  rendimientos.3<-rendimientos.1/rendimientos.1[5]
+  rendimientos.4<-c(sum(colSums(prediccion_htree)), sum(colSums(prediccion_baggedTrees)), 
+                    sum(colSums(prediccion_randomForest)), sum(colSums(retornos_prueba*matriz.pesos.general)),ipsa_30dias)
+  aciertos.comparacion<-c(sum(colSums(portfolio.htree_equaly>0)), sum(colSums(portfolio.baggedTrees_equaly>0)), 
+                          sum(colSums(portfolio.randomForest_equaly>0)), sum(colSums(retornos_prueba*matriz.pesos.general>0)),sum(tail(IPSA_retornos, n=periodo_2017)[l:(l+espacio_tiempo-1),2]>0))
+  equivocaciones.comparacion<- c(sum(colSums(portfolio.htree_equaly<0)), sum(colSums(portfolio.baggedTrees_equaly<0)), 
+                                 sum(colSums(portfolio.randomForest_equaly<0)), sum(colSums(retornos_prueba*matriz.pesos.general<0)),sum(tail(IPSA_retornos, n=periodo_2017)[l:(l+espacio_tiempo-1),2]<0))
+  rendimientos.5<- aciertos.comparacion/(aciertos.comparacion+equivocaciones.comparacion)
+  
+  rendimientos<- matrix(c(rendimientos.1, rendimientos.2, rendimientos.3, rendimientos.4, rendimientos.5), nrow=5, ncol=5, byrow = TRUE)
+  colnames(rendimientos)<- c("HyperTree", "BaggedTrees", "RandomForest","Equally Weighted 16" ,"IPSA")
+  rownames(rendimientos)<- c("Rend. Mensual", "Rend. respecto EW16" ,"Rend. respecto IPSA", "Turnover", "Hit Ratio")
+  tablas.rendimientos[[cuenta.lugares]]<- rendimientos
+  tabla.ocio[cuenta.lugares,]<- c(ocio_htree,ocio_baggedTrees,ocio_rf)
+  cuenta.lugares<- cuenta.lugares+1
+}
+
+
+
+#RESULTADOS ROLLING WINDOW
+#--------------------------------------------------------------------------------------
+
+dataset.resultados<- as.data.frame(cbind(retornos.htrees,retornos.baggedTrees, retornos.randomForest, retornos.EW16,retornos.IPSA))
+colnames(dataset.resultados)<- c("Dec.TreeHyper", "BaggedTrees", "RandomForest", "EW 16", "IPSA")
+boxplot(dataset.resultados, las=2, col= NULL,cex.axis=0.7)
+
+
+mostrando.rendimientos<- matrix(c(100*sapply(dataset.resultados, mean), 100*sapply(dataset.resultados, var), sapply(dataset.resultados, skewness), sapply(dataset.resultados, kurtosis)), nrow=4, ncol=5, byrow=TRUE)
+colnames(mostrando.rendimientos)<- c("Dec.TreeHyper", "BaggedTrees", "RandomForest", "EW 16", "IPSA")
+rownames(mostrando.rendimientos)<- c("Media 100%", "Varianza 100%", "Asimetr?a", "Curtosis")
+mostrando.rendimientos
+
+
+sharpe.tanteo<- mostrando.rendimientos[1,]/sqrt(mostrando.rendimientos[2,])
+sharpe.tanteo
+
+
+tracking.error<- sapply(dataset.resultados[,1:3]-dataset.resultados[,5], sd)
+tracking.error
+information.ratio<- (mostrando.rendimientos[1,1:3]-mostrando.rendimientos[1,5])/tracking.error
+information.ratio
+head(dataset.resultados)
+
+(row.names(tabla.resultados.htree)<- empresas)
+(row.names(tabla.resultados.bagged)<- empresas)
+(row.names(tabla.resultados.rf)<- empresas)
+tabla.resultados.htree
+tabla.resultados.bagged
+tabla.resultados.rf
+
+hist(retornos.htrees)
+hist(retornos.baggedTrees)
+hist(retornos.randomForest)
+hist(retornos.EW16)
+hist(retornos.IPSA)
+
+
+prediccion_htree
+prediccion_baggedTrees
+prediccion_randomForest
+colSums(portfolio.htree_equaly)
+colSums(portfolio.baggedTrees_equaly)
+colSums(portfolio.randomForest_equaly)
+
+
+portfolio.htree_equaly
+portfolio.baggedTrees_equaly
+portfolio.randomForest_equaly
+
+
+hitratio.htrees<- c()
+hitratio.baggedTrees<- c()
+hitratio.randomForest<- c()
+hitratio.EW16<- c()
+hitratio.IPSA<-c()
+for (i in 1:length(tablas.rendimientos)){
+  hitratio.htrees[i]<- tablas.rendimientos[[i]][5,1]
+  hitratio.baggedTrees[i]<- tablas.rendimientos[[i]][5,2]
+  hitratio.randomForest[i]<- tablas.rendimientos[[i]][5,3]
+  hitratio.EW16<- tablas.rendimientos[[i]][5,4]
+  hitratio.IPSA<- tablas.rendimientos[[i]][5,5]
+}
+
+
+hitratio.dataset<- as.data.frame(cbind(hitratio.htrees, hitratio.baggedTrees, hitratio.randomForest, hitratio.EW16, hitratio.IPSA))
+colnames(hitratio.dataset)<- c("Dec.TreeHyper", "BaggedTrees", "RandomForest", "EW16", "IPSA")
+head(hitratio.dataset)
+mostrando.hitratio<- matrix(c(100*sapply(hitratio.dataset, mean, na.rm=TRUE), 100*sapply(hitratio.dataset, var, na.rm=TRUE), sapply(hitratio.dataset, skewness, na.rm=TRUE), sapply(hitratio.dataset, kurtosis, na.rm=TRUE)), nrow=4, ncol=5, byrow=TRUE)
+colnames(mostrando.hitratio)<- c("Dec.TreeHyper", "BaggedTrees", "RandomForest", "EW16", "IPSA")
+rownames(mostrando.hitratio)<- c("Media en %", "Varianza en %", "Asimetr?a", "Curtosis")
+mostrando.hitratio
+
+
+#OCIO
+colMeans(tabla.ocio)
+hist(tabla.ocio[,1])
+hist(tabla.ocio[,2])
+hist(tabla.ocio[,3])
+
+
+
+#Metricas valiosas
+plot(SP_IPSA_SN$Precio)
+hist(retornos.htrees)
+hist(retornos.baggedTrees)
+hist(retornos.randomForest)
+hist(retornos.EW16)
+hist(retornos.IPSA)
+boxplot(dataset.resultados, las=2, col= NULL,cex.axis=0.7)
+
+mostrando.rendimientos
+mostrando.hitratio
+mostrando.turnovers
+sharpe.tanteo
+tracking.error
+information.ratio
+
+shapiroTest(retornos.htrees)
+shapiroTest(retornos.baggedTrees)
+shapiroTest(retornos.randomForest)
+shapiroTest(retornos.EW16)
+shapiroTest(retornos.IPSA)
+
+
+100*CI(retornos.htrees, ci=0.95)
+100*CI(retornos.baggedTrees, ci=0.95)
+100*CI(retornos.randomForest, ci=0.95)
+100*CI(retornos.EW16, ci=0.95)
+100*CI(retornos.IPSA, ci=0.95)
 
