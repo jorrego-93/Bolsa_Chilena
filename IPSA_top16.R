@@ -91,6 +91,8 @@ for (name in empresas){
 }
 #TODOS LOS NULOS SON IGUALES para cada empresa
 
+
+#VARIABLES
 #VARIABLE SUBIDA DEL PRECIO, retorno y rendimiento. (del closing price)
 nombre.columnas<- c(colnames(LISTA[[1]]), "Retorno.close", "Rendimiento.close.diario")
 LISTA.completa<- LISTA
@@ -98,6 +100,7 @@ for ( j in empresas){
   LISTA.completa[[j]]<- cbind(LISTA.completa[[j]], (diff(LISTA[[j]][,4])), dailyReturn(LISTA[[j]][,4]))
   colnames(LISTA.completa[[j]])<- c(colnames(LISTA[[j]]), "Retorno.close", "Rendimiento.close.diario")
 }
+
 #VARIABLE PREDICTORA
 var.pred<- list()
 largo <-length(LISTA[[1]][,4])
@@ -116,12 +119,65 @@ for (name in empresas){
 }
 names(datos)<- empresas
 #MIS DATOS
-LISTA.completa
-INDICADORES
-datos
-class(datos[[1]][10,"Prediccion"])
+#LISTA.completa
+#INDICADORES
+#datos
+#class(datos[[1]][10,"Prediccion"])
 
-head(datos[[1]], n=4)
+#head(datos[[1]], n=4)
 
+#Classificacion
+datos.CLASS<- list()
+for (name in empresas){
+  datos.CLASS[[name]]<- datos[[name]][, c(9:20)]
+  datos.CLASS[[name]]<- datos.CLASS[[name]][-length(datos.CLASS[[name]][,1]),] #Boto la ultima fila porque no conozco la Prediccion
+  colnames(datos.CLASS[[name]])<- colnames(datos[[1]][,9:20])
+}
+
+#THRESHOLD FUNCTIONS
+threshold_finder<- function(predicciones, referencia){ #referencia = validation data
+  threshold<- seq(0.05, 0.95, by = 0.005)
+  TN.FN_optimo<- 0
+  threshold_optimo<- 0
+  for (i in 1:length(threshold)){
+    pred<- ifelse(predicciones[,1]>threshold[i], 0, 1)
+    if (sum(pred==1)!=length(pred) & sum(pred==1)>4){ #que no sean solo subidas o bajadas
+      aers<-confusionMatrix(table(data=as.vector(pred), 
+                                  reference=as.vector(referencia)))
+      TN.FN_ratio<-((0.1+aers$table[2,2])/(0.1+aers$table[2,1]+aers$table[2,2]))
+      threshold_optimo<- ifelse(TN.FN_ratio>TN.FN_optimo, threshold[i], threshold_optimo)
+      TN.FN_optimo<- ifelse(TN.FN_ratio>TN.FN_optimo, TN.FN_ratio, TN.FN_optimo)} else{
+      }
+  }
+  return (list(corte=threshold_optimo, True.neg_False.pos=TN.FN_optimo))
+}
+thresh_optimizer<- function (modelo, data){
+  n_thresh<- 2
+  contador<- 100
+  thresh_promedio<- c()
+  while (contador>0.2){
+    assignment2<- sample(1:n_thresh, size=nrow(data), 
+                         prob=c(rep(1/n_thresh, n_thresh)), replace=TRUE)
+    muestras<- list()
+    predicciones<- list()
+    thresh_try<- list()
+    for (i in 1:n_thresh){
+      muestras[[i]]<- data[assignment2==i, ]
+    }
+    for (i in 1:n_thresh){
+      predicciones[[i]]<- predict(modelo, muestras[[i]], type="response")$predictions #CAMBIAR AQUI (para RF: prob a response y agregar $predictions; para el resto: lo contrario)
+      thresh_try[[i]]<- threshold_finder(predicciones = predicciones[[i]], 
+                                         referencia = muestras[[i]]$Prediccion)$corte
+    }
+    thresh_promedio<- cbind(thresh_promedio, rowMeans(as.data.frame(thresh_try)))
+    if (n_thresh>3){
+      contador<- abs(thresh_promedio[length(thresh_promedio)]-thresh_promedio[length(thresh_promedio)-1])/thresh_promedio[length(thresh_promedio)-1]
+      n_thresh<- n_thresh*2
+    }else {
+      n_thresh<- n_thresh*2
+    }
+  }
+  return (list(corte= mean(c(thresh_promedio[length(thresh_promedio)], thresh_promedio[length(thresh_promedio)-1])), thresholds=thresh_promedio, n_iteraciones=n_thresh, error=contador))
+}
 
 
